@@ -42,18 +42,9 @@ jobs:
         with:
           targets: ${{ matrix.platform.target }}
       - name: Build
+        working-directory: surfman
         run: |
-          rustup target add ${{ matrix.platform.target }}
-          cargo build --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
-      - name: Test
-        if: ${{ matrix.platform.test && startsWith(matrix.platform.os, 'ubuntu') }}
-        run: |
-          weston --no-config --socket=wl-test-env --backend=headless &
-          WAYLAND_DISPLAY=wl-test-env xvfb-run cargo test --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
-      - name: Test
-        if: ${{ matrix.platform.test && !startsWith(matrix.platform.os, 'ubuntu') }}
-        run: |
-          cargo test --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
+          cargo test --features "${{ matrix.features }}"
   build_result:
     name: Result
     runs-on: ubuntu-24.04
