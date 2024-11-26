@@ -21,19 +21,12 @@ jobs:
       matrix:
         platform:
           - { target: x86_64-pc-windows-msvc, os: windows-latest, test: true }
-          - { target: i686-pc-windows-msvc, os: windows-latest, test: false }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest, test: false }
-        features:
-          [
-            "",
-            "chains sm-raw-window-handle-06",
-            "chains sm-raw-window-handle-05",
-          ]
+        features: ["", "sm-raw-window-handle"]
         include:
-          - features: "chains sm-angle-builtin"
+          - features: "sm-angle-builtin"
             platform:
               { target: x86_64-pc-windows-msvc, os: windows-latest, test: true }
-          - features: "chains sm-no-wgl sm-angle-builtin"
+          - features: "sm-no-wgl sm-angle-builtin"
             platform:
               { target: x86_64-pc-windows-msvc, os: windows-latest, test: true }
     steps:
