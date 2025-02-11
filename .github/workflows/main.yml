@@ -65,6 +65,8 @@ jobs:
           cargo build --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
       - name: Test
         if: ${{ matrix.platform.test && startsWith(matrix.platform.os, 'ubuntu') }}
+        env:
+          LIBGL_ALWAYS_SOFTWARE: 1
         run: |
           weston --no-config --socket=wl-test-env --backend=headless &
           WAYLAND_DISPLAY=wl-test-env xvfb-run cargo test --features "${{ matrix.features }}" --target ${{ matrix.platform.target }} -- --nocapture
