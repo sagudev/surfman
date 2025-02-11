@@ -141,7 +141,8 @@ impl Device {
         let mut next_context_id = CREATE_CONTEXT_MUTEX.lock().unwrap();
 
         // Create a dummy pbuffer.
-        let pbuffer = context::create_dummy_pbuffer(self.egl_display, native_context.egl_context);
+        let pbuffer =
+            context::create_dummy_pbuffer(self.egl_display, native_context.egl_context).unwrap();
 
         // Create the context.
         let context = Context {
