@@ -139,6 +139,10 @@ impl EGLBackedContext {
 
     pub(crate) unsafe fn destroy(&mut self, egl_display: EGLDisplay) {
         EGL_FUNCTIONS.with(|egl| {
+            let result = egl.DestroySurface(self.egl_display, context.pbuffer);
+            assert_ne!(result, egl::FALSE);
+            context.pbuffer = egl::NO_SURFACE;
+
             egl.MakeCurrent(
                 egl_display,
                 egl::NO_SURFACE,
