@@ -105,7 +105,7 @@ impl Device {
             )?;
 
             // Create a dummy pbuffer.
-            let pbuffer = context::create_dummy_pbuffer(egl_display, egl_context);
+            let pbuffer = context::create_dummy_pbuffer(egl_display, egl_context).unwrap();
 
             EGL_FUNCTIONS.with(|egl| {
                 if egl.MakeCurrent(egl_display, pbuffer, pbuffer, egl_context) == egl::FALSE {
