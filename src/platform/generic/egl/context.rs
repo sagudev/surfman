@@ -28,6 +28,7 @@ const RGB_CHANNEL_BIT_DEPTH: EGLint = 8;
 pub(crate) struct EGLBackedContext {
     pub(crate) egl_context: EGLContext,
     pub(crate) id: ContextID,
+    pbuffer: ExternalEGLSurfaces,
     framebuffer: Framebuffer<EGLBackedSurface, ExternalEGLSurfaces>,
     context_is_owned: bool,
 }
@@ -102,12 +103,19 @@ impl EGLBackedContext {
             gl_api,
         )?;
 
+        // Create a dummy pbuffer.
+        let pbuffer = create_dummy_pbuffer(egl_display, egl_context);
+
         // Wrap and return it.
         let context = EGLBackedContext {
             egl_context,
             id: *next_context_id,
             framebuffer: Framebuffer::None,
             context_is_owned: true,
+            pbuffer: ExternalEGLSurfaces {
+                draw: pbuffer,
+                read: pbuffer,
+            },
         };
         next_context_id.0 += 1;
         Ok(context)
@@ -123,6 +131,7 @@ impl EGLBackedContext {
                 read: native_context.egl_read_surface,
             }),
             context_is_owned: false,
+            pbuffer: ExternalEGLSurfaces::default(),
         };
         next_context_id.0 += 1;
         context
@@ -164,7 +173,7 @@ impl EGLBackedContext {
         let egl_surfaces = match self.framebuffer {
             Framebuffer::Surface(ref surface) => surface.egl_surfaces(),
             Framebuffer::External(ref surfaces) => (*surfaces).clone(),
-            Framebuffer::None => ExternalEGLSurfaces::default(),
+            Framebuffer::None => self.pbuffer.clone(),
         };
 
         EGL_FUNCTIONS.with(|egl| {
