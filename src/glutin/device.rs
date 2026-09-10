@@ -668,6 +668,9 @@ impl Device {
 
     /// Displays the contents of a widget surface on screen.
     pub fn present_surface(&self, context: &Context, surface: &mut Surface) -> Result<(), Error> {
+        if surface.context_id() != context.id {
+            return Err(Error::IncompatibleSurface);
+        }
         let glutin_surface = match &surface.objects {
             SurfaceObjects::Window { glutin_surface, .. } => glutin_surface,
             SurfaceObjects::Generic(_) => return Err(Error::NoWidgetAttached),
@@ -675,12 +678,23 @@ impl Device {
 
         self.make_context_current(context)?;
         let inner = context.inner.borrow();
-        match inner.as_ref().ok_or(Error::NoCurrentContext)? {
-            ContextState::Current(possibly_current) => glutin_surface
-                .swap_buffers(possibly_current)
-                .map_err(|_| Error::PresentFailed(WindowingApiError::Failed)),
-            ContextState::NotCurrent(_) => Err(Error::NoCurrentContext),
-        }
+        let possibly_current = match inner.as_ref().ok_or(Error::NoCurrentContext)? {
+            ContextState::Current(possibly_current) => possibly_current,
+            ContextState::NotCurrent(_) => return Err(Error::NoCurrentContext),
+        };
+
+        possibly_current
+            .make_current(glutin_surface)
+            .map_err(|_| Error::MakeCurrentFailed(WindowingApiError::Failed))?;
+
+        let result = glutin_surface
+            .swap_buffers(possibly_current)
+            .map_err(|_| Error::PresentFailed(WindowingApiError::Failed));
+
+        drop(inner);
+        let _ = self.make_context_current(context);
+
+        result
     }
 
     /// If the currently bound surface is a widget surface, resize it.
