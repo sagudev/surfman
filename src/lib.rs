@@ -26,6 +26,8 @@ mod context;
 pub mod device;
 pub mod error;
 mod gl_utils;
+#[cfg(glutin_platform)]
+pub mod glutin;
 #[cfg(any(android_platform, ohos_platform))]
 pub mod hardware_buffer;
 mod info;
@@ -33,8 +35,6 @@ pub mod macros;
 #[cfg(free_unix)]
 pub mod mesa_surfaceless;
 pub mod multi;
-#[cfg(glutin_platform)]
-pub mod glutin;
 mod renderbuffers;
 mod surface;
 #[cfg(all(x11_platform, not(wayland_default)))]
@@ -50,6 +50,8 @@ pub mod x11;
 pub use angle as default;
 #[cfg(all(macos_platform, not(glutin_platform)))]
 pub use cgl as default;
+#[cfg(glutin_platform)]
+pub use glutin as default;
 #[cfg(any(android_platform, ohos_platform))]
 pub use hardware_buffer as default;
 #[cfg(all(x11_platform, not(wayland_default), not(glutin_platform)))]
@@ -58,8 +60,6 @@ pub use unix as default;
 pub use wayland as default;
 #[cfg(all(windows_platform, not(angle_default), not(glutin_platform)))]
 pub use wgl as default;
-#[cfg(glutin_platform)]
-pub use glutin as default;
 
 pub use crate::context::{ContextAttributeFlags, ContextAttributes, ContextID};
 pub use crate::error::{Error, WindowingApiError};

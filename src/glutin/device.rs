@@ -160,11 +160,13 @@ impl Device {
             } else {
                 0
             })
-            .with_stencil_size(if attributes.flags.contains(ContextAttributeFlags::STENCIL) {
-                8
-            } else {
-                0
-            })
+            .with_stencil_size(
+                if attributes.flags.contains(ContextAttributeFlags::STENCIL) {
+                    8
+                } else {
+                    0
+                },
+            )
             .with_surface_type(ConfigSurfaceTypes::WINDOW)
             .build();
 
@@ -223,12 +225,14 @@ impl Device {
                 Some(context) => {
                     let inner = context.inner.borrow();
                     match inner.as_ref().ok_or(Error::IncompatibleSharedContext)? {
-                        ContextState::NotCurrent(shared) => {
-                            display.create_context(&descriptor.config, &builder.with_sharing(shared).build(None))
-                        }
-                        ContextState::Current(shared) => {
-                            display.create_context(&descriptor.config, &builder.with_sharing(shared).build(None))
-                        }
+                        ContextState::NotCurrent(shared) => display.create_context(
+                            &descriptor.config,
+                            &builder.with_sharing(shared).build(None),
+                        ),
+                        ContextState::Current(shared) => display.create_context(
+                            &descriptor.config,
+                            &builder.with_sharing(shared).build(None),
+                        ),
                     }
                 }
                 None => display.create_context(&descriptor.config, &builder.build(None)),
@@ -236,8 +240,8 @@ impl Device {
         }
         .map_err(|_| Error::ContextCreationFailed(WindowingApiError::Failed))?;
 
-        let current_state =
-            make_surfaceless_current(not_current).map_err(|_| Error::MakeCurrentFailed(WindowingApiError::Failed))?;
+        let current_state = make_surfaceless_current(not_current)
+            .map_err(|_| Error::MakeCurrentFailed(WindowingApiError::Failed))?;
 
         let gl = unsafe {
             Gl::from_loader_function(|symbol| match std::ffi::CString::new(symbol) {
@@ -276,7 +280,10 @@ impl Device {
     ) -> Result<Context, Error> {
         let inner = {
             let last_current = self.last_current.borrow();
-            last_current.as_ref().ok_or(Error::NoCurrentContext)?.clone()
+            last_current
+                .as_ref()
+                .ok_or(Error::NoCurrentContext)?
+                .clone()
         };
 
         let config = {
@@ -374,7 +381,9 @@ impl Device {
 
         let result = match window_surface {
             Some(glutin_surface) => match state {
-                ContextState::NotCurrent(nc) => nc.make_current(glutin_surface).map(ContextState::Current),
+                ContextState::NotCurrent(nc) => {
+                    nc.make_current(glutin_surface).map(ContextState::Current)
+                }
                 ContextState::Current(pc) => pc
                     .make_current(glutin_surface)
                     .map(|_| ContextState::Current(pc)),
@@ -501,11 +510,17 @@ impl Device {
     ) -> Result<Surface, Error> {
         match surface_type {
             SurfaceType::Generic { size } => self.create_generic_surface(context, size),
-            SurfaceType::Widget { native_widget } => self.create_window_surface(context, native_widget),
+            SurfaceType::Widget { native_widget } => {
+                self.create_window_surface(context, native_widget)
+            }
         }
     }
 
-    fn create_generic_surface(&self, context: &Context, size: Size2D<i32>) -> Result<Surface, Error> {
+    fn create_generic_surface(
+        &self,
+        context: &Context,
+        size: Size2D<i32>,
+    ) -> Result<Surface, Error> {
         self.make_context_current(context)?;
         let egl_display = raw_egl_display(&self.native_connection().display)?;
         let egl_context = raw_egl_context(context)?;
@@ -538,8 +553,9 @@ impl Device {
         );
 
         let display = self.native_connection().display;
-        let glutin_surface = unsafe { display.create_window_surface(&context.descriptor.config, &attrs) }
-            .map_err(|_| Error::SurfaceCreationFailed(WindowingApiError::Failed))?;
+        let glutin_surface =
+            unsafe { display.create_window_surface(&context.descriptor.config, &attrs) }
+                .map_err(|_| Error::SurfaceCreationFailed(WindowingApiError::Failed))?;
 
         Ok(Surface {
             objects: SurfaceObjects::Window {
@@ -586,7 +602,11 @@ impl Device {
     }
 
     /// Destroys a surface.
-    pub fn destroy_surface(&self, context: &mut Context, surface: &mut Surface) -> Result<(), Error> {
+    pub fn destroy_surface(
+        &self,
+        context: &mut Context,
+        surface: &mut Surface,
+    ) -> Result<(), Error> {
         if surface.context_id() != context.id {
             return Err(Error::IncompatibleSurface);
         }
@@ -664,7 +684,11 @@ impl Device {
     }
 
     /// If the currently bound surface is a widget surface, resize it.
-    pub fn resize_bound_surface(&self, context: &mut Context, size: Size2D<i32>) -> Result<(), Error> {
+    pub fn resize_bound_surface(
+        &self,
+        context: &mut Context,
+        size: Size2D<i32>,
+    ) -> Result<(), Error> {
         self.make_context_current(context)?;
 
         let mut framebuffer = context.framebuffer.borrow_mut();
@@ -710,7 +734,10 @@ impl Device {
 
     /// Returns the OpenGL texture object containing the contents of this surface.
     #[inline]
-    pub fn surface_texture_object(&self, surface_texture: &SurfaceTexture) -> Option<glow::Texture> {
+    pub fn surface_texture_object(
+        &self,
+        surface_texture: &SurfaceTexture,
+    ) -> Option<glow::Texture> {
         surface_texture.surface.texture_object
     }
 }

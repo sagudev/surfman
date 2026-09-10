@@ -151,7 +151,9 @@ impl Connection {
 
     /// Opens the display connection corresponding to the given `RawDisplayHandle`.
     #[cfg(feature = "sm-raw-window-handle-05")]
-    pub fn from_raw_display_handle(raw_handle: rwh_05::RawDisplayHandle) -> Result<Connection, Error> {
+    pub fn from_raw_display_handle(
+        raw_handle: rwh_05::RawDisplayHandle,
+    ) -> Result<Connection, Error> {
         let raw_display_handle = rwh05_display_to_rwh06(raw_handle)?;
         Self::from_raw_display_handle_06(raw_display_handle)
     }
@@ -163,7 +165,9 @@ impl Connection {
     }
 
     #[allow(dead_code)]
-    fn from_raw_display_handle_06(raw_display_handle: RawDisplayHandle) -> Result<Connection, Error> {
+    fn from_raw_display_handle_06(
+        raw_display_handle: RawDisplayHandle,
+    ) -> Result<Connection, Error> {
         let (windowing_system, preference) = match raw_display_handle {
             #[cfg(x11_platform)]
             RawDisplayHandle::Xlib(_) => (WindowingSystem::Xlib, DisplayApiPreference::Egl),
@@ -243,9 +247,11 @@ impl Connection {
                 rwh_06::WaylandWindowHandle::new(NonNull::new(raw).expect("null wl_surface")),
             ),
             #[cfg(windows_platform)]
-            WindowingSystem::Win32 => rwh_06::RawWindowHandle::Win32(rwh_06::Win32WindowHandle::new(
-                std::num::NonZeroIsize::new(raw as isize).expect("null HWND"),
-            )),
+            WindowingSystem::Win32 => {
+                rwh_06::RawWindowHandle::Win32(rwh_06::Win32WindowHandle::new(
+                    std::num::NonZeroIsize::new(raw as isize).expect("null HWND"),
+                ))
+            }
             #[cfg(macos_platform)]
             WindowingSystem::AppKit => rwh_06::RawWindowHandle::AppKit(
                 rwh_06::AppKitWindowHandle::new(NonNull::new(raw).expect("null NSView")),
@@ -296,12 +302,14 @@ fn rwh05_display_to_rwh06(handle: rwh_05::RawDisplayHandle) -> Result<RawDisplay
         )),
         #[cfg(free_unix)]
         rwh_05::RawDisplayHandle::Wayland(handle) => Ok(RawDisplayHandle::Wayland(
-            rwh_06::WaylandDisplayHandle::new(NonNull::new(handle.display).ok_or(Error::IncompatibleRawDisplayHandle)?),
+            rwh_06::WaylandDisplayHandle::new(
+                NonNull::new(handle.display).ok_or(Error::IncompatibleRawDisplayHandle)?,
+            ),
         )),
         #[cfg(windows_platform)]
-        rwh_05::RawDisplayHandle::Windows(_) => {
-            Ok(RawDisplayHandle::Windows(rwh_06::WindowsDisplayHandle::new()))
-        }
+        rwh_05::RawDisplayHandle::Windows(_) => Ok(RawDisplayHandle::Windows(
+            rwh_06::WindowsDisplayHandle::new(),
+        )),
         #[cfg(macos_platform)]
         rwh_05::RawDisplayHandle::AppKit(_) => {
             Ok(RawDisplayHandle::AppKit(rwh_06::AppKitDisplayHandle::new()))
@@ -313,7 +321,9 @@ fn rwh05_display_to_rwh06(handle: rwh_05::RawDisplayHandle) -> Result<RawDisplay
 /// Converts a `raw-window-handle` 0.5 window handle into the 0.6 equivalent that `glutin`
 /// expects.
 #[cfg(feature = "sm-raw-window-handle-05")]
-fn rwh05_window_to_rwh06(handle: rwh_05::RawWindowHandle) -> Result<rwh_06::RawWindowHandle, Error> {
+fn rwh05_window_to_rwh06(
+    handle: rwh_05::RawWindowHandle,
+) -> Result<rwh_06::RawWindowHandle, Error> {
     match handle {
         #[cfg(x11_platform)]
         rwh_05::RawWindowHandle::Xlib(handle) => Ok(rwh_06::RawWindowHandle::Xlib(
@@ -321,19 +331,23 @@ fn rwh05_window_to_rwh06(handle: rwh_05::RawWindowHandle) -> Result<rwh_06::RawW
         )),
         #[cfg(free_unix)]
         rwh_05::RawWindowHandle::Wayland(handle) => Ok(rwh_06::RawWindowHandle::Wayland(
-            rwh_06::WaylandWindowHandle::new(NonNull::new(handle.surface).ok_or(Error::InvalidNativeWidget)?),
+            rwh_06::WaylandWindowHandle::new(
+                NonNull::new(handle.surface).ok_or(Error::InvalidNativeWidget)?,
+            ),
         )),
         #[cfg(windows_platform)]
         rwh_05::RawWindowHandle::Win32(handle) => Ok(rwh_06::RawWindowHandle::Win32(
             rwh_06::Win32WindowHandle::new(
-                std::num::NonZeroIsize::new(handle.hwnd as isize).ok_or(Error::InvalidNativeWidget)?,
+                std::num::NonZeroIsize::new(handle.hwnd as isize)
+                    .ok_or(Error::InvalidNativeWidget)?,
             ),
         )),
         #[cfg(macos_platform)]
         rwh_05::RawWindowHandle::AppKit(handle) => Ok(rwh_06::RawWindowHandle::AppKit(
-            rwh_06::AppKitWindowHandle::new(NonNull::new(handle.ns_view).ok_or(Error::InvalidNativeWidget)?),
+            rwh_06::AppKitWindowHandle::new(
+                NonNull::new(handle.ns_view).ok_or(Error::InvalidNativeWidget)?,
+            ),
         )),
         _ => Err(Error::InvalidNativeWidget),
     }
 }
-

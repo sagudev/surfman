@@ -32,7 +32,11 @@ fn create_context_and_render_to_generic_surface() {
 
     let size = Size2D::new(64, 64);
     let surface = device
-        .create_surface(&context, SurfaceAccess::GPUOnly, SurfaceType::Generic { size })
+        .create_surface(
+            &context,
+            SurfaceAccess::GPUOnly,
+            SurfaceType::Generic { size },
+        )
         .expect("failed to create surface");
     device
         .bind_surface_to_context(&mut context, surface)
