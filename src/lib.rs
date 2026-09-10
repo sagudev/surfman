@@ -33,6 +33,8 @@ pub mod macros;
 #[cfg(free_unix)]
 pub mod mesa_surfaceless;
 pub mod multi;
+#[cfg(glutin_platform)]
+pub mod glutin;
 mod renderbuffers;
 mod surface;
 #[cfg(all(x11_platform, not(wayland_default)))]
