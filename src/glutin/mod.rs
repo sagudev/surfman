@@ -15,3 +15,7 @@ pub mod device;
 pub mod surface;
 
 crate::implement_interfaces!();
+
+#[cfg(test)]
+#[path = "../tests.rs"]
+mod tests;

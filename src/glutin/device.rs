@@ -3,10 +3,10 @@
 use super::connection::{Connection, NativeConnection};
 use super::context::{Context, ContextDescriptor, ContextState, NativeContext};
 use super::surface::{NativeWidget, Surface, SurfaceObjects, SurfaceTexture};
+use crate::base::egl::surface::EGLBackedSurface;
 use crate::context::{ContextID, CREATE_CONTEXT_MUTEX};
+use crate::egl::types::{EGLContext, EGLDisplay};
 use crate::gl;
-use crate::gl_utils;
-use crate::renderbuffers::Renderbuffers;
 use crate::surface::Framebuffer;
 use crate::{
     ContextAttributeFlags, ContextAttributes, Error, GLApi, Gl, SurfaceAccess, SurfaceInfo,
@@ -14,12 +14,13 @@ use crate::{
 };
 
 use euclid::default::Size2D;
-use glow::{HasContext, PixelUnpackData};
-use glutin::config::{ConfigSurfaceTypes, ConfigTemplateBuilder};
+use glow::HasContext;
+use glutin::config::{ConfigSurfaceTypes, ConfigTemplateBuilder, GetGlConfig};
 use glutin::context::{
     AsRawContext, ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentContext,
-    PossiblyCurrentContext, Version,
+    PossiblyCurrentContext, RawContext, Version,
 };
+use glutin::display::{AsRawDisplay, RawDisplay};
 use glutin::prelude::*;
 use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 use std::cell::RefCell;
@@ -90,10 +91,6 @@ impl Adapter {
 pub struct Device {
     pub(crate) connection: Connection,
     pub(crate) adapter: Adapter,
-    /// A hidden context that every context created by this device shares GL objects with. This
-    /// lets `Surface`s created from any context be turned into `SurfaceTexture`s and read from
-    /// any other context created by this device, without needing EGL-image-style tricks.
-    pub(crate) shared_context: RefCell<Option<glutin::context::NotCurrentContext>>,
     /// The context, if any, that was last made current through this device.
     pub(crate) last_current: RefCell<Option<Rc<RefCell<Option<ContextState>>>>>,
 }
@@ -111,7 +108,6 @@ impl Device {
         Ok(Device {
             connection: connection.clone(),
             adapter: adapter.clone(),
-            shared_context: RefCell::new(None),
             last_current: RefCell::new(None),
         })
     }
@@ -190,27 +186,12 @@ impl Device {
         })
     }
 
-    fn ensure_shared_context(&self, config: &glutin::config::Config) -> Result<(), Error> {
-        if self.shared_context.borrow().is_some() {
-            return Ok(());
-        }
-
-        let display = self.native_connection().display;
-        let attributes = ContextAttributesBuilder::new().build(None);
-        let context = unsafe { display.create_context(config, &attributes) }
-            .map_err(|_| Error::ContextCreationFailed(WindowingApiError::Failed))?;
-        *self.shared_context.borrow_mut() = Some(context);
-        Ok(())
-    }
-
     /// Creates a new OpenGL context and makes it current.
     pub fn create_context(
         &self,
         descriptor: &ContextDescriptor,
         share_with: Option<&Context>,
     ) -> Result<Context, Error> {
-        self.ensure_shared_context(&descriptor.config)?;
-
         let context_api = match self.gl_api() {
             GLApi::GL => ContextApi::OpenGl(Some(Version::new(
                 descriptor.attributes.version.major,
@@ -250,11 +231,7 @@ impl Device {
                         }
                     }
                 }
-                None => {
-                    let shared_context = self.shared_context.borrow();
-                    let shared_context = shared_context.as_ref().ok_or(Error::IncompatibleSharedContext)?;
-                    display.create_context(&descriptor.config, &builder.with_sharing(shared_context).build(None))
-                }
+                None => display.create_context(&descriptor.config, &builder.build(None)),
             }
         }
         .map_err(|_| Error::ContextCreationFailed(WindowingApiError::Failed))?;
@@ -288,13 +265,63 @@ impl Device {
 
     /// Wraps a native context object in an OpenGL context.
     ///
-    /// This backend does not support wrapping a raw context pointer, because `glutin` provides
-    /// no API to reconstruct a typed context from one.
+    /// `glutin` provides no API to reconstruct one of its own context types from a raw pointer,
+    /// so this doesn't create an independent context object. Instead, provided the native
+    /// context matches whichever `surfman` context is currently current on this device, it
+    /// returns a new `Context` that shares the same underlying `glutin` context (and therefore
+    /// the same GL state) as that context.
     pub unsafe fn create_context_from_native_context(
         &self,
-        _native_context: NativeContext,
+        native_context: NativeContext,
     ) -> Result<Context, Error> {
-        Err(Error::Unimplemented)
+        let inner = {
+            let last_current = self.last_current.borrow();
+            last_current.as_ref().ok_or(Error::NoCurrentContext)?.clone()
+        };
+
+        let config = {
+            let state = inner.borrow();
+            let raw_context = match state.as_ref() {
+                Some(ContextState::Current(pc)) => pc.raw_context(),
+                Some(ContextState::NotCurrent(nc)) => nc.raw_context(),
+                None => return Err(Error::NoCurrentContext),
+            };
+            if raw_context != native_context.0 {
+                return Err(Error::IncompatibleNativeContext);
+            }
+            match state.as_ref() {
+                Some(ContextState::Current(pc)) => pc.config(),
+                Some(ContextState::NotCurrent(nc)) => nc.config(),
+                None => unreachable!(),
+            }
+        };
+
+        let display = self.native_connection().display;
+        let gl = unsafe {
+            Gl::from_loader_function(|symbol| match std::ffi::CString::new(symbol) {
+                Ok(c_str) => display.get_proc_address(&c_str) as *const _,
+                Err(_) => std::ptr::null(),
+            })
+        };
+
+        let id = {
+            let mut next_context_id = CREATE_CONTEXT_MUTEX.lock().unwrap();
+            let id = *next_context_id;
+            next_context_id.0 += 1;
+            id
+        };
+
+        Ok(Context {
+            id,
+            gl,
+            descriptor: ContextDescriptor {
+                config,
+                attributes: ContextAttributes::zeroed(),
+            },
+            inner,
+            framebuffer: RefCell::new(Framebuffer::None),
+            destroyed: false,
+        })
     }
 
     /// Destroys a context.
@@ -339,7 +366,7 @@ impl Device {
         let framebuffer = context.framebuffer.borrow();
         let window_surface = match &*framebuffer {
             Framebuffer::Surface(surface) => match &surface.objects {
-                SurfaceObjects::Window { glutin_surface } => Some(glutin_surface),
+                SurfaceObjects::Window { glutin_surface, .. } => Some(glutin_surface),
                 SurfaceObjects::Generic { .. } => None,
             },
             _ => None,
@@ -399,7 +426,7 @@ impl Device {
         context: &mut Context,
         surface: Surface,
     ) -> Result<(), (Error, Surface)> {
-        if surface.context_id != context.id {
+        if surface.context_id() != context.id {
             return Err((Error::IncompatibleSurface, surface));
         }
         if !matches!(&*context.framebuffer.borrow(), Framebuffer::None) {
@@ -480,48 +507,21 @@ impl Device {
 
     fn create_generic_surface(&self, context: &Context, size: Size2D<i32>) -> Result<Surface, Error> {
         self.make_context_current(context)?;
-        let gl = &context.gl;
+        let egl_display = raw_egl_display(&self.native_connection().display)?;
+        let egl_context = raw_egl_context(context)?;
 
-        unsafe {
-            let texture_object = gl.create_texture().ok();
-            let old_texture = gl.get_parameter_texture(gl::TEXTURE_BINDING_2D);
-            gl.bind_texture(gl::TEXTURE_2D, texture_object);
-            gl.tex_image_2d(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGBA as i32,
-                size.width.max(1),
-                size.height.max(1),
-                0,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
-                PixelUnpackData::Slice(None),
-            );
-            gl.bind_texture(gl::TEXTURE_2D, old_texture);
+        let egl_surface = EGLBackedSurface::new_generic(
+            &context.gl,
+            egl_display,
+            egl_context,
+            context.id,
+            &context.descriptor.attributes,
+            &size,
+        );
 
-            let framebuffer_object = gl_utils::create_and_bind_framebuffer(gl, gl::TEXTURE_2D, texture_object);
-
-            let renderbuffers = Renderbuffers::new(gl, &size, &context.descriptor.attributes);
-            renderbuffers.bind_to_current_framebuffer(gl);
-
-            debug_assert_eq!(
-                gl.check_framebuffer_status(gl::FRAMEBUFFER),
-                gl::FRAMEBUFFER_COMPLETE
-            );
-
-            gl.bind_framebuffer(gl::FRAMEBUFFER, None);
-
-            Ok(Surface {
-                context_id: context.id,
-                size,
-                objects: SurfaceObjects::Generic {
-                    framebuffer_object: Some(framebuffer_object),
-                    texture_object,
-                    renderbuffers,
-                },
-                destroyed: false,
-            })
-        }
+        Ok(Surface {
+            objects: SurfaceObjects::Generic(egl_surface),
+        })
     }
 
     fn create_window_surface(
@@ -542,10 +542,11 @@ impl Device {
             .map_err(|_| Error::SurfaceCreationFailed(WindowingApiError::Failed))?;
 
         Ok(Surface {
-            context_id: context.id,
-            size: native_widget.size,
-            objects: SurfaceObjects::Window { glutin_surface },
-            destroyed: false,
+            objects: SurfaceObjects::Window {
+                glutin_surface,
+                context_id: context.id,
+                size: native_widget.size,
+            },
         })
     }
 
@@ -553,57 +554,68 @@ impl Device {
     /// context.
     pub fn create_surface_texture(
         &self,
-        _context: &mut Context,
+        context: &mut Context,
         surface: Surface,
     ) -> Result<SurfaceTexture, (Error, Surface)> {
-        match surface.objects {
-            SurfaceObjects::Window { .. } => Err((Error::WidgetAttached, surface)),
-            SurfaceObjects::Generic { .. } => Ok(SurfaceTexture {
-                surface,
+        let egl_surface = match surface.objects {
+            SurfaceObjects::Window { .. } => return Err((Error::WidgetAttached, surface)),
+            SurfaceObjects::Generic(egl_surface) => egl_surface,
+        };
+
+        if let Err(err) = self.make_context_current(context) {
+            return Err((
+                err,
+                Surface {
+                    objects: SurfaceObjects::Generic(egl_surface),
+                },
+            ));
+        }
+
+        match egl_surface.to_surface_texture(&context.gl) {
+            Ok(surface_texture) => Ok(SurfaceTexture {
+                surface: surface_texture,
                 phantom: PhantomData,
             }),
+            Err((err, egl_surface)) => Err((
+                err,
+                Surface {
+                    objects: SurfaceObjects::Generic(egl_surface),
+                },
+            )),
         }
     }
 
     /// Destroys a surface.
     pub fn destroy_surface(&self, context: &mut Context, surface: &mut Surface) -> Result<(), Error> {
-        if surface.context_id != context.id {
+        if surface.context_id() != context.id {
             return Err(Error::IncompatibleSurface);
         }
 
         match &mut surface.objects {
             SurfaceObjects::Window { .. } => {}
-            SurfaceObjects::Generic {
-                framebuffer_object,
-                texture_object,
-                renderbuffers,
-            } => {
+            SurfaceObjects::Generic(egl_surface) => {
                 self.make_context_current(context)?;
-                let gl = &context.gl;
-                unsafe {
-                    gl.bind_framebuffer(gl::FRAMEBUFFER, None);
-                    if let Some(framebuffer_object) = framebuffer_object.take() {
-                        gl_utils::destroy_framebuffer(gl, framebuffer_object);
-                    }
-                    renderbuffers.destroy(gl);
-                    if let Some(texture_object) = texture_object.take() {
-                        gl.delete_texture(texture_object);
-                    }
-                }
+                let egl_display = raw_egl_display(&self.native_connection().display)?;
+                egl_surface.destroy(&context.gl, egl_display, context.id)?;
             }
         }
 
-        surface.destroyed = true;
         Ok(())
     }
 
     /// Destroys a surface texture and returns the underlying surface.
     pub fn destroy_surface_texture(
         &self,
-        _context: &mut Context,
+        context: &mut Context,
         surface_texture: SurfaceTexture,
     ) -> Result<Surface, (Error, SurfaceTexture)> {
-        Ok(surface_texture.surface)
+        if let Err(err) = self.make_context_current(context) {
+            return Err((err, surface_texture));
+        }
+        let egl_surface = surface_texture.surface.destroy(&context.gl);
+        Ok(Surface {
+            objects: SurfaceObjects::Generic(egl_surface),
+        })
     }
 
     /// Returns the OpenGL texture target needed to read from this surface texture.
@@ -621,8 +633,8 @@ impl Device {
             _ => return Err(Error::NoWidgetAttached),
         };
         let glutin_surface = match &surface.objects {
-            SurfaceObjects::Window { glutin_surface } => glutin_surface,
-            SurfaceObjects::Generic { .. } => return Err(Error::NoWidgetAttached),
+            SurfaceObjects::Window { glutin_surface, .. } => glutin_surface,
+            SurfaceObjects::Generic(_) => return Err(Error::NoWidgetAttached),
         };
 
         let inner = context.inner.borrow();
@@ -637,8 +649,8 @@ impl Device {
     /// Displays the contents of a widget surface on screen.
     pub fn present_surface(&self, context: &Context, surface: &mut Surface) -> Result<(), Error> {
         let glutin_surface = match &surface.objects {
-            SurfaceObjects::Window { glutin_surface } => glutin_surface,
-            SurfaceObjects::Generic { .. } => return Err(Error::NoWidgetAttached),
+            SurfaceObjects::Window { glutin_surface, .. } => glutin_surface,
+            SurfaceObjects::Generic(_) => return Err(Error::NoWidgetAttached),
         };
 
         self.make_context_current(context)?;
@@ -657,7 +669,7 @@ impl Device {
 
         let mut framebuffer = context.framebuffer.borrow_mut();
         if let Framebuffer::Surface(surface) = &mut *framebuffer {
-            if let SurfaceObjects::Window { glutin_surface } = &surface.objects {
+            if let SurfaceObjects::Window { glutin_surface, .. } = &surface.objects {
                 let inner = context.inner.borrow();
                 if let Some(ContextState::Current(possibly_current)) = inner.as_ref() {
                     let width = NonZeroU32::new(size.width.max(1) as u32).unwrap();
@@ -665,7 +677,7 @@ impl Device {
                     glutin_surface.resize(possibly_current, width, height);
                 }
             }
-            surface.size = size;
+            surface.set_size(size);
         }
         Ok(())
     }
@@ -677,7 +689,7 @@ impl Device {
         surface: &mut Surface,
         size: Size2D<i32>,
     ) -> Result<(), Error> {
-        if let SurfaceObjects::Window { glutin_surface } = &surface.objects {
+        if let SurfaceObjects::Window { glutin_surface, .. } = &surface.objects {
             self.make_context_current(context)?;
             let inner = context.inner.borrow();
             if let Some(ContextState::Current(possibly_current)) = inner.as_ref() {
@@ -686,33 +698,20 @@ impl Device {
                 glutin_surface.resize(possibly_current, width, height);
             }
         }
-        surface.size = size;
+        surface.set_size(size);
         Ok(())
     }
 
     /// Returns various information about the surface, including the framebuffer object needed
     /// to render to this surface.
     pub fn surface_info(&self, surface: &Surface) -> SurfaceInfo {
-        SurfaceInfo {
-            size: surface.size,
-            id: surface.id(),
-            context_id: surface.context_id,
-            framebuffer_object: match &surface.objects {
-                SurfaceObjects::Window { .. } => None,
-                SurfaceObjects::Generic {
-                    framebuffer_object, ..
-                } => *framebuffer_object,
-            },
-        }
+        surface.info()
     }
 
     /// Returns the OpenGL texture object containing the contents of this surface.
     #[inline]
     pub fn surface_texture_object(&self, surface_texture: &SurfaceTexture) -> Option<glow::Texture> {
-        match &surface_texture.surface.objects {
-            SurfaceObjects::Generic { texture_object, .. } => *texture_object,
-            SurfaceObjects::Window { .. } => None,
-        }
+        surface_texture.surface.texture_object
     }
 }
 
@@ -745,5 +744,35 @@ fn make_surfaceless_current_in_place(
         #[cfg(not(macos_platform))]
         PossiblyCurrentContext::Egl(egl) => egl.make_current_surfaceless(),
         _ => Ok(()),
+    }
+}
+
+/// Extracts the raw `EGLDisplay` out of a `glutin` display.
+///
+/// Generic surfaces are backed directly by `EGLImage`s (via `crate::base::egl`, shared with the
+/// other EGL-based backends) rather than by anything `glutin` creates, since `glutin`'s safe API
+/// doesn't expose `EGLImage`. That's also what lets a `SurfaceTexture` be read from any context
+/// on the same display, even one belonging to a different `Device` or thread, without needing an
+/// explicit OpenGL sharing group.
+fn raw_egl_display(display: &glutin::display::Display) -> Result<EGLDisplay, Error> {
+    match display.raw_display() {
+        #[cfg(not(macos_platform))]
+        RawDisplay::Egl(ptr) => Ok(ptr as *mut c_void as EGLDisplay),
+        _ => Err(Error::UnsupportedOnThisPlatform),
+    }
+}
+
+/// Extracts the raw `EGLContext` out of a `surfman` context.
+fn raw_egl_context(context: &Context) -> Result<EGLContext, Error> {
+    let inner = context.inner.borrow();
+    let raw_context = match inner.as_ref() {
+        Some(ContextState::Current(pc)) => pc.raw_context(),
+        Some(ContextState::NotCurrent(nc)) => nc.raw_context(),
+        None => return Err(Error::NoCurrentContext),
+    };
+    match raw_context {
+        #[cfg(not(macos_platform))]
+        RawContext::Egl(ptr) => Ok(ptr as *mut c_void as EGLContext),
+        _ => Err(Error::UnsupportedOnThisPlatform),
     }
 }

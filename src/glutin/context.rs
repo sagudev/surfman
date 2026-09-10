@@ -51,6 +51,33 @@ pub struct Context {
 #[derive(Clone, Copy, Debug)]
 pub struct NativeContext(pub RawContext);
 
+impl NativeContext {
+    /// Returns the context that is currently current on this thread, if any.
+    ///
+    /// Note that `glutin` doesn't provide a way to reconstruct one of its own context types from
+    /// a raw pointer, so `Device::create_context_from_native_context()` doesn't create an
+    /// independent copy of the context; instead, it hands back a new `Context` value that shares
+    /// the same underlying `glutin` context as whichever `surfman` context is current on the
+    /// device (the only one that could plausibly be the "current" context to begin with).
+    #[cfg(not(macos_platform))]
+    pub fn current() -> Result<NativeContext, crate::Error> {
+        crate::base::egl::device::EGL_FUNCTIONS.with(|egl| unsafe {
+            let egl_context = egl.GetCurrentContext();
+            if egl_context == crate::egl::NO_CONTEXT {
+                Err(crate::Error::NoCurrentContext)
+            } else {
+                Ok(NativeContext(RawContext::Egl(egl_context as *const _)))
+            }
+        })
+    }
+
+    /// Returns the context that is currently current on this thread, if any.
+    #[cfg(macos_platform)]
+    pub fn current() -> Result<NativeContext, crate::Error> {
+        Err(crate::Error::Unimplemented)
+    }
+}
+
 impl Drop for Context {
     fn drop(&mut self) {
         if !self.destroyed && !thread::panicking() {

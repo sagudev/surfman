@@ -1,41 +1,36 @@
 //! Surfaces backed by the [`glutin`] crate.
 
-use crate::renderbuffers::Renderbuffers;
-use crate::{ContextID, SurfaceID};
+use crate::base::egl::surface::{EGLBackedSurface, EGLSurfaceTexture};
+use crate::{ContextID, SurfaceID, SurfaceInfo};
 
 use euclid::default::Size2D;
-use glow::{NativeFramebuffer, NativeTexture};
 use glutin::surface::{Surface as GlutinSurface, WindowSurface};
 use rwh_06::RawWindowHandle;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
-use std::thread;
 
 /// Represents a hardware buffer of pixels that can be rendered to via the GPU and either
 /// displayed in a native widget or bound to a texture for reading.
 ///
-/// Surfaces come in two varieties: generic and widget surfaces. Generic surfaces are backed by
-/// an OpenGL framebuffer object with a texture color attachment, and can be wrapped up in a
-/// `SurfaceTexture` for reading from another context; widget surfaces are backed by a real
-/// `glutin` window surface and can be presented on screen, but cannot be read from a texture.
+/// Surfaces come in two varieties: generic and widget surfaces. Widget surfaces are backed by a
+/// real `glutin` window surface and can be presented on screen, but cannot be read from a
+/// texture. Generic surfaces are backed by an `EGLImage`-based OpenGL framebuffer object (the
+/// same mechanism the other EGL-based backends use), which can be wrapped up in a
+/// `SurfaceTexture` and read from *any* context on the same display connection, even one
+/// belonging to a different `Device` or a different thread.
 ///
-/// Surfaces must be destroyed with the `destroy_surface()` method, or a panic will occur.
+/// You must explicitly call `Device::destroy_surface()` to dispose of a surface.
 pub struct Surface {
-    pub(crate) context_id: ContextID,
-    pub(crate) size: Size2D<i32>,
     pub(crate) objects: SurfaceObjects,
-    pub(crate) destroyed: bool,
 }
 
 pub(crate) enum SurfaceObjects {
     Window {
         glutin_surface: GlutinSurface<WindowSurface>,
+        context_id: ContextID,
+        size: Size2D<i32>,
     },
-    Generic {
-        framebuffer_object: Option<NativeFramebuffer>,
-        texture_object: Option<NativeTexture>,
-        renderbuffers: Renderbuffers,
-    },
+    Generic(EGLBackedSurface),
 }
 
 unsafe impl Send for Surface {}
@@ -46,21 +41,39 @@ impl Debug for Surface {
     }
 }
 
-impl Drop for Surface {
-    fn drop(&mut self) {
-        if !self.destroyed && !thread::panicking() {
-            panic!("Should have destroyed the surface first with `destroy_surface()`!")
-        }
-    }
-}
-
 impl Surface {
     pub(crate) fn id(&self) -> SurfaceID {
-        match self.objects {
+        match &self.objects {
             SurfaceObjects::Window { .. } => SurfaceID(self as *const Surface as usize),
-            SurfaceObjects::Generic { texture_object, .. } => {
-                SurfaceID(texture_object.map_or(0, |texture| texture.0.get() as usize))
-            }
+            SurfaceObjects::Generic(surface) => surface.id(),
+        }
+    }
+
+    pub(crate) fn context_id(&self) -> ContextID {
+        match &self.objects {
+            SurfaceObjects::Window { context_id, .. } => *context_id,
+            SurfaceObjects::Generic(surface) => surface.context_id,
+        }
+    }
+
+    pub(crate) fn set_size(&mut self, new_size: Size2D<i32>) {
+        match &mut self.objects {
+            SurfaceObjects::Window { size, .. } => *size = new_size,
+            SurfaceObjects::Generic(surface) => surface.size = new_size,
+        }
+    }
+
+    pub(crate) fn info(&self) -> SurfaceInfo {
+        match &self.objects {
+            SurfaceObjects::Window {
+                context_id, size, ..
+            } => SurfaceInfo {
+                size: *size,
+                id: self.id(),
+                context_id: *context_id,
+                framebuffer_object: None,
+            },
+            SurfaceObjects::Generic(surface) => surface.info(),
         }
     }
 }
@@ -71,13 +84,13 @@ impl Surface {
 /// to write to such a texture.
 ///
 /// Surface textures are local to a context, but that context does not have to be the same
-/// context as that associated with the underlying surface, as long as both contexts are part of
-/// the same device (and therefore share an OpenGL sharing group).
+/// context as that associated with the underlying surface: it can belong to any device (or
+/// thread) that shares the same display connection.
 ///
 /// The surface texture must be destroyed with the `destroy_surface_texture()` method, or a panic
 /// will occur.
 pub struct SurfaceTexture {
-    pub(crate) surface: Surface,
+    pub(crate) surface: EGLSurfaceTexture,
     pub(crate) phantom: PhantomData<*const ()>,
 }
 

@@ -46,18 +46,20 @@ pub mod wgl;
 #[cfg(x11_platform)]
 pub mod x11;
 
-#[cfg(all(windows_platform, angle_default))]
+#[cfg(all(windows_platform, angle_default, not(glutin_platform)))]
 pub use angle as default;
-#[cfg(macos_platform)]
+#[cfg(all(macos_platform, not(glutin_platform)))]
 pub use cgl as default;
 #[cfg(any(android_platform, ohos_platform))]
 pub use hardware_buffer as default;
-#[cfg(all(x11_platform, not(wayland_default)))]
+#[cfg(all(x11_platform, not(wayland_default), not(glutin_platform)))]
 pub use unix as default;
-#[cfg(wayland_default)]
+#[cfg(all(wayland_default, not(glutin_platform)))]
 pub use wayland as default;
-#[cfg(all(windows_platform, not(angle_default)))]
+#[cfg(all(windows_platform, not(angle_default), not(glutin_platform)))]
 pub use wgl as default;
+#[cfg(glutin_platform)]
+pub use glutin as default;
 
 pub use crate::context::{ContextAttributeFlags, ContextAttributes, ContextID};
 pub use crate::error::{Error, WindowingApiError};
