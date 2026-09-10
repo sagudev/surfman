@@ -72,17 +72,17 @@ jobs:
           tool: cargo-nextest
       - name: Build
         run: |
-          cargo build --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
+          cargo build --features "sm-glutin ${{ matrix.features }}" --target ${{ matrix.platform.target }}
       - name: Test
         if: ${{ matrix.platform.test && startsWith(matrix.platform.os, 'ubuntu') }}
         run: |
           weston --no-config --socket=wl-test-env --backend=headless &
-          WAYLAND_DISPLAY=wl-test-env xvfb-run cargo nextest run --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
+          WAYLAND_DISPLAY=wl-test-env xvfb-run cargo nextest run --features "sm-glutin ${{ matrix.features }}" --target ${{ matrix.platform.target }}
       - name: Test
         if: ${{ matrix.platform.test && !startsWith(matrix.platform.os, 'ubuntu') }}
         timeout-minutes: 30 # https://github.com/servo/surfman/issues/329
         run: |
-          cargo nextest run --features "${{ matrix.features }}" --target ${{ matrix.platform.target }}
+          cargo nextest run --features "sm-glutin ${{ matrix.features }}" --target ${{ matrix.platform.target }}
 
   android-test:
     name: ${{ format('x86_64-linux-android {0}', matrix.features)}}
@@ -126,7 +126,7 @@ jobs:
           script: |
             cargo dinghy all-platforms
             cargo dinghy all-devices
-            cargo dinghy -p auto-android-x86_64-api30 --env RUST_BACKTRACE=${{ env.RUST_BACKTRACE }} test --features "${{ matrix.features }}" -- --test-threads 1 --nocapture
+            cargo dinghy -p auto-android-x86_64-api30 --env RUST_BACKTRACE=${{ env.RUST_BACKTRACE }} test --features "sm-glutin ${{ matrix.features }}" -- --test-threads 1 --nocapture
 
   Format:
     name: Run `rustfmt`
